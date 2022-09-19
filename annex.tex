@@ -1,0 +1,81 @@
+\section{Annex}
+In this section, I will write and briefly describe codes that can be useful in order to attain a better understanding of the backends and the parallelization in PyTorch. I recommend the reader to take some time to experiment and play with them.
+
+\subsection{MPI}
+\subsubsection{Simple send-receive peer-to-peer exchange}
+This first example consists of a simple exchange from a sender to a receiver. We send a number across the devices: rank 0 (root) is the sender and rank 1 will receive and print the result.
+
+\begin{lstlisting}[language=C]
+    #include <mpi.h>
+    #include <stdio.h>
+
+    int main(int argc, char **argv) {
+        MPI_Init(NULL, NULL);
+        int rank;
+        MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+        int size;
+        MPI_Comm_size(MPI_COMM_WORLD, &size);
+
+        int number;
+        if(rank == 0) {
+            number = 43523;
+            MPI_Send(&number, 1, MPI_INT, 1, 0, MPI_COMM_WORLD);
+        } else if(rank == 1) {
+            MPI_Recv(&number, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            printf("Process 1 received number %d from process 0\n", number);
+        }
+        MPI_Finalize();
+    }
+\end{lstlisting}
+
+It is important here to note that the node with rank 1 has not seen what the number is initialized to: one must be careful about what each process knows from the code itself or from what it receives from other nodes.
+
+\subsubsection{Approximating \texorpdfstring{$\pi$}{pi} using multiple processes}
+Let's go through a quite fun example. We are here trying to approximate \(\pi\) using the Taylor series expansion for \(\arctan(1)\), using the fact that \(\pi=4\cdot \frac{\pi}{4}=4\cdot \arctan(1)\).
+\[\arctan(1)=\sum_{n=0}^{\infty} \frac{(-1)^n}{2n+1}\]
+
+The idea is that each process will compute one element of this sum. We then use \lstinline{MPI_Reduce} with the sum operation to compute \(\frac{\pi}{4}\) and multiply it by 4. The result is sent to the root process defined in the head of the code, and the root process is asked to print the result.
+
+\begin{lstlisting}[language=C]
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <mpi.h>
+    #include <math.h>
+
+    #define ROOT 0
+
+    double taylor(const int i, const double x, const double a) {
+        int sign = pow(-1, i);
+        double num = pow(x, 2 * i + 1);
+        double den = a * (2 * i + 1);
+        return (sign * num / den);
+    }
+
+    int main(int argc, char *argv[]) {
+        int nodes, rank;
+        double* partial;
+        double res;
+        double total = 0;
+
+        MPI_Init(&argc, &argv);
+        MPI_Comm_size(MPI_COMM_WORLD, &nodes);
+        MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+
+        res = taylor(rank, 1, 1);
+        printf("rank=%d total=%f\n", rank, res);
+
+        MPI_Reduce(&res, &total, 1, MPI_DOUBLE, MPI_SUM, ROOT, MPI_COMM_WORLD);
+
+        if(rank == ROOT)
+            printf("Total is = %f\n", 4*total);
+
+        MPI_Finalize();
+    }
+\end{lstlisting}
+
+\subsection{NCCL}
+% TODO
+TODO: NCCL code is not working on my computer (GPUs crashing)
+
+\subsection{PyTorch DDP}
+% TODO

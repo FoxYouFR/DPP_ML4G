@@ -1,0 +1,77 @@
+{
+    "editor.fontLigatures": true,
+    "editor.suggestSelection": "first",
+    "editor.suggest.snippetsPreventQuickSuggestions": true,
+    "latex-utilities.message.update.show": false,
+    "latex-utilities.texdef.enabled": true,
+    "latex-workshop.view.pdf.viewer": "tab",
+    "latex-workshop.linting.run": "onSave",
+    "latex-workshop.intellisense.package.enabled": true,
+    "latex-workshop.intellisense.unimathsymbols.enabled": true,
+    "latex-workshop.mathpreviewpanel.editorGroup": "above",
+    "latex-workshop.latex.recipes":[
+        {
+            "name": "withglossary",
+            "tools": [
+                "pdflatex",
+                "makeglossaries",
+                "pdflatex",
+                "pdflatex"
+            ]
+        }
+    ],
+    "latex-workshop.latex.tools":[
+        {
+            "name": "pdflatex",
+            "command": "pdflatex",
+            "args": [
+                "-synctex=1",
+                "-interaction=nonstopmode",
+                "-file-line-error",
+                "%DOC%"
+            ]
+        },
+        {
+            "name": "makeglossaries",
+            "command": "makeglossaries",
+            "args": [
+              "%DOCFILE%"
+            ]
+          }, 
+          {
+            "name": "latexmk",
+            "command": "latexmk",
+            "args": [
+                "-synctex=1",
+                "-interaction=nonstopmode",
+                "-file-line-error",
+                "-pdf",
+                "%DOC%"
+            ]
+        },
+    ],
+    "[latex]": {
+        "editor.quickSuggestionsDelay": 0,
+        "editor.wordBasedSuggestions": false,
+        "editor.rulers": [130],
+        "editor.wordWrap": "wordWrapColumn",
+        "editor.wordWrapColumn": 130,
+        "files.trimTrailingWhitespace": true,
+        "editor.minimap.autohide": true
+    },
+    "[hsnips]": {
+        "files.trimTrailingWhitespace": false
+    },
+    "cSpell.language": "fr,en-GB",
+    "pasteImage.insertPattern": "\\begin{figure}[h!]\n  \\center\n  \\includegraphics[width=0.5\\linewidth]{images/${imageSyntaxPrefix}${imageFilePath}}\n  \\caption{Caption} \n\\end{figure} \n\\FloatBarrier",
+    "pasteImage.basePath": "${currentFileDir}/images/",
+    "pasteImage.path": "${currentFileDir}/images",
+    "editor.semanticTokenColorCustomizations": {
+        "rules": {
+            "*.deprecated": {
+                "foreground": "#808080",
+                "italic": true
+            }
+        }
+    }
+}
