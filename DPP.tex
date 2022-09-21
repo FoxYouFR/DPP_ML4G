@@ -514,7 +514,7 @@ NVIDIA offers a great summary picture for their backend NCCL. You can also find 
 All of these said, let's go back to PyTorch and spend some time writing distributed applications!
 
 \subsection{Distributed applications in PyTorch}
-If the reader wants to focus on writing distributed Machine Learning models, this section can be skipped. In this section, we will hide the choice of backend behind PyTorch to study some basic communication application. As seen previously, each backend provides different primitives and thus we have to be careful when using the PyTorch distributed abstraction. The chart below shows which backend supports which method: feel free to refer to it later!
+If the reader wants to focus on writing distributed Machine Learning models, this section can be skipped. We will here hide the choice of backend behind PyTorch to study some basic communication application. As seen previously, each backend provides different primitives and thus we have to be careful when using the PyTorch distributed abstraction. The chart below shows which backend supports which method: feel free to refer to it later!
 
 \[\begin{array}{l|ll|ll|ll}
   \text{Backend} & \text{\lstinline{gloo}} & & \text{\lstinline{mpi}} & & \text{\lstinline{nccl}} \\
@@ -533,6 +533,19 @@ If the reader wants to focus on writing distributed Machine Learning models, thi
   \text{all\_to\_all} & \chi & \chi & \checkmark & \checkmark & \chi & \checkmark \\
   \text{barrier} & \checkmark & \chi & \checkmark & \checkmark & \chi & \checkmark
 \end{array}\]
+
+\subsubsection{Other differences between the backends}
+Gloo is considered a good backend for development purposes: it is included in the pre-compiled PyTorch binaries and works on Linux, Windows and macOS. However, its implementation of the collective operations for CUDA tensors is not as optimized as the ones provided by NCCL.
+
+NCCL is included in the pre-built binaries with CUDA support, and offers the best performance with CUDA tensors. It can however be a bit more tricky to setup depending on one's installation.
+
+Finally, MPI is \textit{the} standardized backend. Several implementations exist and each of them is optimized for different purposes. The major issue is that PyTorch binaries cannot include an MPI implementation, and so the user has to compile it by hand. %TODO: explain how to compile with MPI
+
+\subsubsection{Initiating the processes}
+
+\subsubsection{Point-to-Point communication}
+
+\subsubsection{Collective communication}
 
 \subsection{The \texorpdfstring{\lstinline{distributedDataParallel}}{distributedDataParallel} module}
 The most important function in this package is the constructor itself. This container parallelizes the application of the given module by splitting the input across the specified devices by chunking in the batch dimension. The module is replicated on each machine, and every replica handles a portion of the input. During the backwards pass, gradients from each node are averaged. This means that the batch size should be larger than the number of GPUs used locally.
