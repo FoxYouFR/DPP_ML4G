@@ -124,14 +124,14 @@ Finally, the author would like to thank the ML4G organizers and the EffiSciences
 \clearpage
 
 \section{Introduction to Data Parallelism}
-Data parallelism is a technical term referring to scenarios in which an operation is concurrently performed on elements in a source collection. The goal is to partition the source so that multiple threads can compute on different segments simultaneously. There are two big motivations for which one wants to study data parallelism:
+Data parallelism is a technical concept referring to scenarii in which an operation is concurrently performed on elements in a source collection. The goal is to partition the source so that multiple processes can compute on different segments at the same time. Nowadays, we mostly use GPUs and TPUs to parallelize operations. There are two major motivations for which one wants to use data parallelism:
 \begin{itemize}
-  \item Firstly, today's models are way too voluminous to be stored on a single GPU. Note that this trend is (at the time of writing) not slowing down, we thus expect \Gls{SOTA} models to get even bigger in the near future
+  \item Firstly, today's models are too voluminous to be stored on a single GPU. Note that this trend is (at the time of writing) not slowing down, we thus expect \Gls{SOTA} models to get even bigger in the near future
   \item Secondly, we crave speed. While a model might take years to run on a single GPU (or a single machine), we want it to run in a matter of hours
 \end{itemize}
 
 \subsection{First, a bit of terminology}
-All across this documentation and most of the ones you can find online, a few words of terminology will often come back. Let's explain them briefly here (we will come back to them later for more discussion).
+All across this documentation and most of the ones you can find online, a few terms will often come back. Let's explain them briefly here (we will come back to them later for more discussion).
 
 \begin{itemize}
   \item \textbf{World}: term used to describe all the processing units we possess, not depending on which machine they run nor which process they are handling. The \textbf{world size} refers to the total number of processing unit
@@ -151,13 +151,13 @@ For clarity, consider the following example:
 We have three different machine (thus 3 nodes) that each contains 2 GPUs. All of them combined give us the world, with a world-size of 6. Notice how the rank is a unique number across the entire world.
 
 \subsection{Type of parallelization}
-We can distinguish between different type or methods of parallelization, whether we parallelize the data, the tensor or the model. We will later come back to some methods in more detail.
+We can distinguish between different type or methods of parallelization: whether we parallelize the data, the tensor or the model. We will later come back to some methods in more detail.
 \begin{itemize}
-  \item ModelParallel (MP): the model is split up across multiple GPUs. We split along the layers, or group of layers and each GPU will handle a specific block
-  \item DataParallel (DP): the same setup is replicated multiple times, and each is being fed a slice of the data. We synchronize the setups at the end of each training step
-  \item TensorParallel (TP): each tensor is split up into multiple chunks, residing separately on a designated GPU. After each shard gets processed separately, the results are synced
-  \item PipelineParallel (PP): the model is split up across multiple GPUs. Each GPU processes in parallel different stages of the pipeline on a small chunk of the batch
-  \item Zero Redundancy Optimizer (ZeRO): somewhat similar to TensorParallel, except that the whole tensor gets reconstructed in time for a forward or backward computation (no modification on the model). We will come back to this technique later
+  \item Model Parallelism (MP): the model is split up across multiple GPUs. We split along the layers, or group of layers and each GPU will handle a specific block
+  \item Data Parallelism (DP): the same setup is replicated multiple times, and each is being fed a slice of the data. We synchronize the setups at the end of each training step
+  \item Tensor Parallelism (TP): each tensor is split up into multiple chunks, residing separately on a designated GPU. After each shard gets processed separately, the results are synced
+  \item Pipeline Parallelism (PP): the model is split up across multiple GPUs. Each GPU processes in parallel different stages of the pipeline on a small chunk of the batch
+  \item Zero Redundancy Optimizer (ZeRO): somewhat similar to Tensor Parallelism, except that the whole tensor gets reconstructed in time for a forward or backward computation (no modification on the model). We will come back to this technique later in more details
 \end{itemize}
 
 Another way to distinguish between types of parallelism is called the Flynn's taxonomy. It is based on the number of concurrent instruction and data streams:
@@ -183,7 +183,7 @@ Note that there is an information overhead when the data transit from one GPU to
 The main advantage of model parallelism is that it allows for bigger model to be trained, as the GPUs share the memory load. However, all but one GPU is idle at any given time and it has an overhead of copying the data between the devices (especially if they are not on the same node). Remark that it is better to have a 24GB card instead of 4x6GB cards using this parallelism paradigm.
 
 \subsubsection{Pipeline parallelism (PP)}
-This technique is very similar to the previous one, except that we introduce artificially a pipeline to use all GPUs concurrently. Let's compare a typical forward and backward pass. First, here is the flow for a simple model parallelism:
+This technique is very similar to the previous one, except that we artificially introduce a pipeline to use all GPUs concurrently. Let's compare a typical forward and backward pass. First, here is the flow for a simple model parallelism:
 
 \begin{figure}[h!]
   \center
@@ -201,7 +201,7 @@ Pipeline parallelism creates mini-batches of data to keep most of the GPUs runni
 \end{figure}
 \FloatBarrier
 
-The idle parts are referred to as the "bubble". This method introduces a new parameter, the \textit{chunks}, that define how many chunks of data are sent in a sequence through the same pipe stage (the chunk is 4 in the image above). Note that this is the same concept as Gradient Accumulation Steps (\Gls{GAS}). Adding a layer of data parallelism over the pipeline parallelism, we need to distinguish between mini-batches and micro-batches. The global data is first split into mini-batches as usual (e.g. a batch size of 1024 gets split up into 4 mini-batches of 256 each). The pipeline then splits each mini-batches by the number of chucks to obtain a micro-batch (e.g. 32 chunks yield micro-batches of size 8, continuing on the example above). Each stage works with a single micro-batch at a time. One needs to be careful when choosing those sizes: too small and the GPUs won't be used enough, too big and the micro-batches become too tiny.
+The idle parts are referred to as the "bubble". This method introduces a new parameter, the \textit{chunks}, that define how many chunks of data are sent in a sequence through the same pipe stage (the chunk is 4 in the image above). Adding a layer of data parallelism over the pipeline parallelism, we need to distinguish between mini-batches and micro-batches. The global data is first split into mini-batches as usual (e.g. a batch size of 1024 gets split up into 4 mini-batches of 256 each). The pipeline then splits each mini-batches by the number of chucks to obtain a micro-batch (e.g. 32 chunks yield micro-batches of size 8, continuing on the example above). Each stage works with a single micro-batch at a time. One needs to be careful when choosing those sizes: too small and the GPUs won't be used enough, too big and the micro-batches become too tiny.
 
 \subsubsection{Tensor parallelism (TP)}
 In tensor parallelism, each GPU processes only a slice of a tensor. The full tensor is aggregated only for operations that require the whole thing. Let's take a quick detour through linear algebra to better understand it.
@@ -252,13 +252,13 @@ Using these techniques, we can then split a weight matrix \(A\) column-wise acro
 \begin{figure}[h!]
   \center
   \includegraphics[width=0.5\linewidth]{images/2022-08-25-10-04-26.png}
-  \caption{Example of tensor parallelism, directly through the activation function (credit: https://huggingface.co/docs/transformers/v4.16.2/en/parallelism)}
+  \caption{Example of tensor parallelism, through the activation function (credit: https://huggingface.co/docs/transformers/v4.16.2/en/parallelism)}
 \end{figure}
 \FloatBarrier
 
 We need to synchronize only at the end, where the output vector has to be reconstructed.
 
-One major issue unfortunately is that tensor parallelism requires a fast transfer of data. It is thus not advisable to do TP over more than one node.
+One major issue unfortunately is that tensor parallelism requires a fast transfer of data. It is thus not advisable to do tensor parallelism over more than one node.
 
 \subsubsection{Combinations}
 There are many ways to combine the parallelism tools seen above. Some will be detailed in greater details later. Usually, these methods are implemented by known frameworks such as DeepSpeed, Megatron-LM, SageMaker or OSLO.
@@ -289,7 +289,7 @@ It is almost impossible to give a straight answer, as the best techniques to use
 \subsection{Parallelization in PyTorch}
 In PyTorch, the \lstinline{torch.distributed} package contains much of the utilities necessary to begin working with parallelized systems. The official documentation categorizes the package into three main components:
 \begin{itemize}
-  \item Distributed Data-Parallel Training (DDP): the model is replicated on every process and every moel replica will be fed with a different set of input data. The gradient is synchronized on every model replicas, along with its computation to speed up the process.
+  \item Distributed Data-Parallel Training (DDP): the model is replicated on every process and every model replica will be fed with a different set of input data. The gradient is synchronized on every replicas, along with its computation to speed up the process.
   \item RPC-Based Distributed Training (RPC): RPC supports training structures such as distributed pipeline parallelism, parameter sever paradigm for examples. Its main avantage is the extension of the autograd engine beyond machine-boundaries.
   \item Collective Communication (c10d): this library is the API on which DDP and RPC are built (resp. collective communication and P2P). It allows for finer-grain control over what is communicated between the replicas but in exchange gives up the performance optimizations.
 \end{itemize}
@@ -305,7 +305,7 @@ When working on projects that are expected to gradually grow in complexity, a co
 \end{enumerate}
 
 \section{Data-Parallel Training}
-\lstinline{nn.parallel.DataParallel} is the simplest package to allow parallelism during the training process, as it requires only minor additional code (one line could be enough). However, it does not offer the best performance as it replicates the model in every forward pass. The major issue is that it is a single-process multi-thread parallelism that bounds the speed due the infamous \Gls{GIL} single-lock.
+\lstinline{nn.parallel.DataParallel} is the simplest package to allow parallelism during the training process, as it requires only minor additional code (one line is often enough). However, it does not offer the best performance as it replicates the model in every forward pass. The major issue is that it is a single-process multi-thread parallelism that bounds the speed due the infamous \Gls{GIL} single-lock.
 
 \subsection{Using DP on a model}
 The package \lstinline{DataParallel} handles everything on its own. To allow data parallelization on a model in PyTorch, one must simply tell PyTorch to use the module on a given model. We can also indicate which devices to use using the \lstinline{device_ids} parameter:
@@ -321,15 +321,15 @@ While being harder to setup and use, the package \lstinline{nn.parallel.Distribu
   \item Each process contains an independent Python interpreter, thus avoiding the GIL single-lock and making heavy use of the Python runtime
 \end{itemize}
 
-We can discuss the second advantage by saying that \lstinline{dataParallel} is \gls{multithreading} while \lstinline{distributedDataParallel} is \gls{multiprocessing}.
+The second advantage is that \lstinline{dataParallel} is \gls{multithreading} while \lstinline{distributedDataParallel} is \gls{multiprocessing}. This can make a huge difference in Python.
 
 \subsection{Understanding the backends}
-The \lstinline{torch.distributed} package supports three built-in backends that allow the transport of data across multiple process and/or multiple machines. This part is important only for people who want or need to dig deeper into the parallelism world, and can be skipped otherwise.
+The \lstinline{torch.distributed} package supports three built-in backends that allow the transport of data across multiple processes and/or machines. This part is important only for people who want or need to dig deeper into the parallelism world, and can be skipped otherwise.
 
 \subsubsection{MPI}
 MPI (Message Passing Interface) is a library standard for programming distributed memory. MPI is portable and fast, as it has been implemented and optimized on almost all architectures and hardwares. It has language bindings for Fortran, C and C++ and several MPI modules exist in Python.
 
-MPI model consists of communications among processes through messages called \textit{inter-process communication}. All the processes execute the same program but each have a unique ID (rank), allowing the user to select which part should be executed. This is very important to understand: the program is the same across the nodes! To send to a specific device, one can for example use the rank.
+MPI model consists of communications among processes through messages called \textit{inter-process communication}. All the nodes execute the same program but each have a unique ID (rank), allowing the user to select which part should be executed by which process. This is very important to understand: the program is the same across the nodes! To ask a specific device to go through a part of the code, one can use its rank in a condition before.
 
 \begin{figure}[h!]
   \center
@@ -362,7 +362,7 @@ Among the most important MPI commands are those used for initiating and closing 
 \end{lstlisting}
 
 \paragraph{Synchronization}
-Often, parallel algorithms require that no process continues on before all the processes have reached a certain state at certains points of the program. For that, it is possible to ask for explicit synchronization:
+Often, parallel algorithms require that no process continues on before all the processes have reached a certain state at certains points in the program. For that, it is possible to ask for explicit synchronization:
 \begin{lstlisting}[language=C]
   int MPI_Barrier(MPI_Comm comm);
 \end{lstlisting}
@@ -389,7 +389,7 @@ Of course, non-blocking communications are also possible: the following methods 
 \end{lstlisting}
 
 \paragraph{Collective communication}
-Collective communication refers to the process of synchronizing and moving data or create pool of collective computation. It involves all the processes within the scope of a communicator. By default, all the processes are in the \lstinline{MPI_COMM_WORLD} communicator, but it is possible to define groups of communicators.
+Collective communication refers to the process of synchronizing and moving data or creating pool of collective computation. It involves all the processes within the scope of a communicator. By default, all the processes are in the \lstinline{MPI_COMM_WORLD} communicator, but it is possible to define groups of communicators.
 
 \begin{itemize}
   \item Broadcasting: share data from the process with rank root to all other processes of the communicator including the root process
@@ -435,7 +435,7 @@ Collective communication refers to the process of synchronizing and moving data 
 \end{itemize}
 
 \subsubsection{NCCL}
-NCCL (for NVIDIA Collective Communications Library, pronounced "Nickel") is a library providing inter-GPU communication functions (called primitives). Like MPI, it implements both point-to-point send/receive and collective communication primitives. However, contrary to MPI, it is not a parallel programming framework, but aims at accelerating inter-GPU communication. NCCL implements each collective communication primitives in a single kernel handling both communications and computation operations, allowing for fast synchronization and minimizing the resources needed to reach peak bandwidth. This tool works any multi-GPU parallelization model (e.g. single-threaded control of all GPUs, multi-threaded (one thread per GPU), multi-process with MPI, ...).
+NCCL (for NVIDIA Collective Communications Library, pronounced "Nickel") is a library providing inter-GPU communication functions (called primitives). Like MPI, it implements both point-to-point send/receive and collective communication primitives. However, contrary to MPI, it is not a parallel programming framework, but aims at accelerating inter-GPU communication. NCCL implements each collective communication primitives in a single kernel handling both communications and computation operations, allowing for fast synchronization and minimizing the resources needed to reach peak bandwidth. This tool works on any multi-GPU parallelization model (e.g. single-threaded control of all GPUs, multi-threaded (one thread per GPU), multi-process with MPI, ...).
 
 NCCL possesses a C API, accessible from multiple programming languages and follows the MPI collectives API. The most important modification is the presence of a \lstinline{stream} argument providing direct integration with the CUDA programming model.
 
