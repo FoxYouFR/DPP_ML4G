@@ -20,6 +20,7 @@
 \usepackage[useregional]{datetime2}
 \usepackage{glossaries}
 \usepackage{xurl}
+\usepackage[super]{nth}
 \usepackage{hyperref}
 \hypersetup{
     colorlinks=true,
@@ -81,6 +82,8 @@
 \newglossaryentry{multiprocessing}{name=multiprocessing,description={Multiple processors run concurrently, where each processor can run one or more threads}}
 \newglossaryentry{GAS}{name={GAS},description={for Gradient Accumulation steps, mechanism to split the batch of samples into mini-batches that run sequentially and that will add its gradient up to a total gradient}}
 \newglossaryentry{SOTA}{name={SOTA},description={for State Of The Art, refers to the best models , in a specific subdomain or generally}}
+\newglossaryentry{GPU}{name={GPU},description={for Graphics Processing Unit, is a specialized electronic circuit capable of computing matrix operations very quickly due to its parallel structure. It is used mostly in computer graphics, image processing and artificial intelligence}}
+\newglossaryentry{TPU}{name={TPU},description={for Tensor Processing Unit, is a specialized integrated circuit for neural network machine learning}}
 
 \makeglossaries
 
@@ -100,7 +103,7 @@
     \textbf{\emph{Kolly Florian}}
     \vspace{5cm}
   \end{center}
-  Version 0.3 (\DTMnow) - Initial draft for first review
+  Version 0.4 (\DTMnow) - Began documenting ZeRO and DeepSpeed
   \begin{center}
     \vspace{5cm}
     \includegraphics[width=0.4\textwidth]{images/pytorch-logo.png}
@@ -109,33 +112,35 @@
 \end{titlepage}
 
 \setlength{\parindent}{0em}
-\setlength{\parskip}{0.3em}
+\setlength{\parskip}{0.2em}
 
 \tableofcontents
 \newpage
 
 \section{Disclaimer}
-This document is heavily based on the available documentation online, that is the \href{https://pytorch.org/docs/stable/index.html}{officiel PyTorch documentation}, the \href{https://huggingface.co/docs}{Huggingsface documentation} and many others. All drawings are made with \href{https://www.draw.io}{draw.io} unless a source is specified in the caption.
+This document is heavily based on the available documentation online, that is the \href{https://pytorch.org/docs/stable/index.html}{officiel PyTorch documentation}, the \href{https://huggingface.co/docs}{Huggingsface documentation} and many others. All drawings are made with \href{https://www.draw.io}{draw.io}.
 
-All faults are my own, and no warranty is given about the content and code in this document. Some examples of code are given and briefly described in the annex section of this document. The Python version used here is 3.6.
+All mistakes are my own, and no warranty is given about the content and code in this document. Some examples of code are given and briefly described in the annex section of this document. The Python version used here are 3.6.
 
-Finally, the author would like to thank the ML4G organizers and the EffiSciences team behind for the camp where this document began.
+Finally, the author would like to thank the ML4G organizers and the EffiSciences team behind for the camp where this document began, and especially Charbel-Raphael and Quentin for their advices and the great exchanges I had with them! A huge thank to my friend Leo Meier for spending a long night helping me with some diagrams and for her continued support, and to my all my other friends at EPFL for listening to me trying to explain parallelization, hopefully with a bit of success.
+
+ALPHA RELEASE DISCLAIMER: This version is an alpha release, not intended for public access. Multiple reviews and rewritings can and will be made on any section of this document. Many chapters, if not most, are incomplete and/or deserve more clarity. The author is aware of those issues.
 
 \clearpage
 
 \section{Introduction to Data Parallelism}
-Data parallelism is a technical concept referring to scenarii in which an operation is concurrently performed on elements in a source collection. The goal is to partition the source so that multiple processes can compute on different segments at the same time. Nowadays, we mostly use GPUs and TPUs to parallelize operations. There are two major motivations for which one wants to use data parallelism:
+Data parallelism is a technical concept referring to scenarii in which an operation is concurrently performed on elements in a source collection. The goal is to partition the source so that multiple processes can compute on different segments at the same time. Nowadays, we mostly use \GLS{GPU}s and \GLS{TPU}s to parallelize operations. There are two major motivations for which one wants to implement data parallelism:
 \begin{itemize}
-  \item Firstly, today's models are too voluminous to be stored on a single GPU. Note that this trend is (at the time of writing) not slowing down, we thus expect \Gls{SOTA} models to get even bigger in the near future
-  \item Secondly, we crave speed. While a model might take years to run on a single GPU (or a single machine), we want it to run in a matter of hours
+  \item Firstly, today's models are too voluminous to be stored on a single \GLS{GPU}. Note that this trend is (at the time of writing) not slowing down, we thus expect \Gls{SOTA} models to get even bigger in the near future
+  \item Secondly, we crave speed. While a model might take years to run on a single \GLS{GPU} (or a single machine), we want it to run in a matter of hours
 \end{itemize}
 
 \subsection{First, a bit of terminology}
-All across this documentation and most of the ones you can find online, a few terms will often come back. Let's explain them briefly here (we will come back to them later for more discussion).
+All across this documentation and most of the ones you can find online, a few terms will often come back. Let's explain them briefly here (we will come back to them later in more details).
 
 \begin{itemize}
-  \item \textbf{World}: term used to describe all the processing units we possess, not depending on which machine they run nor which process they are handling. The \textbf{world size} refers to the total number of processing unit
-  \item \textbf{Node}: number of devices that are connected to the same backend
+  \item \textbf{World}: term used to describe all the processing units available, not depending on which device they run nor which process they are handling. The \textbf{world size} refers to the total number of processing unit
+  \item \textbf{Node}: name of a device that is connected to a specific communication group
   \item \textbf{Rank}: unique ID given to a processing unit
   \item \textbf{Local rank}: same as the rank, but on a specific node
   \item \textbf{Root}: specific process considered as the main one. It is usually given rank 0, but this is no obligation
@@ -148,51 +153,51 @@ For clarity, consider the following example:
 \end{figure}
 \FloatBarrier
 
-We have three different machine (thus 3 nodes) that each contains 2 GPUs. All of them combined give us the world, with a world-size of 6. Notice how the rank is a unique number across the entire world.
+We have three different devices (thus 3 nodes) that each contains 2 \GLS{GPU}s. All of them combined give us the world, with a world-size of 6. Notice how the rank is a unique number across the entire world.
 
 \subsection{Type of parallelization}
-We can distinguish between different type or methods of parallelization: whether we parallelize the data, the tensor or the model. We will later come back to some methods in more detail.
+We can distinguish between different types or methods of parallelization: whether we parallelize the data, the tensors or the models. We will later come back to some methods in more detail.
 \begin{itemize}
-  \item Model Parallelism (MP): the model is split up across multiple GPUs. We split along the layers, or group of layers and each GPU will handle a specific block
-  \item Data Parallelism (DP): the same setup is replicated multiple times, and each is being fed a slice of the data. We synchronize the setups at the end of each training step
-  \item Tensor Parallelism (TP): each tensor is split up into multiple chunks, residing separately on a designated GPU. After each shard gets processed separately, the results are synced
-  \item Pipeline Parallelism (PP): the model is split up across multiple GPUs. Each GPU processes in parallel different stages of the pipeline on a small chunk of the batch
-  \item Zero Redundancy Optimizer (ZeRO): somewhat similar to Tensor Parallelism, except that the whole tensor gets reconstructed in time for a forward or backward computation (no modification on the model). We will come back to this technique later in more details
+  \item Model Parallelism (MP): the model is split up across multiple \GLS{GPU}s. We split along the layers, or group of layers and each \GLS{GPU} handles a specific block
+  \item Data Parallelism (DP): the same program is replicated multiple times on multiple devices, and each device is being fed a slice of the data. We synchronize the devices at the end of each training step
+  \item Tensor Parallelism (TP): each tensor is split up into multiple chunks, residing separately on a designated \GLS{GPU}. After each shard gets processed separately, the results are synced together
+  \item Pipeline Parallelism (PP): the model is split up across multiple \GLS{GPU}s. Each \GLS{GPU} processes in parallel different stages of the pipeline on a small chunk of the batch
+  \item Zero Redundancy Optimizer (ZeRO): somewhat similar to Tensor Parallelism, except that the whole tensor gets reconstructed in time for a forward or backward computation (no modification on the model). We will come back to this technique later in more details, as it is a quite revolutionary technology
 \end{itemize}
 
-Another way to distinguish between types of parallelism is called the Flynn's taxonomy. It is based on the number of concurrent instruction and data streams:
+Another way to distinguish between types of parallelism is called the Flynn's taxonomy. It is a more generic classification based on the number of concurrent instruction and data streams:
 \begin{itemize}
   \item SISD (Single Instruction Single Data): single uniprocessor machine that can execute a single instruction and fetch single data stream from memory
-  \item SIMD (Single Instruction Multiple Data): a device that can issue the same single instruction to multiple data simultaneously (e.g. GPU)
-  \item MISD (Multiple Instruction Single Data): architecture used for fault tolerance, where several systems act on the same data and must agree (we won't talk about it)
+  \item SIMD (Single Instruction Multiple Data): a device that can issue the same single instruction to multiple data simultaneously (e.g. \GLS{GPU})
+  \item MISD (Multiple Instruction Single Data): architecture used for fault tolerance, where several systems act on the same data and must agree (we won't talk about it here)
   \item MIMD (Multiple Instruction Multiple Data): multiple processors executing different instruction on different data (distributed systems)
   \item SPMD (Single Program Multiple Data): single program executed by a multi-processor device or cluster of devices
   \item MPMD (Multiple Program Multiple Data): multiple programs executed by multi-processor device or cluster of devices
 \end{itemize}
 
 \subsubsection{Model Parallelism (MP)}
-Also called vertical data parallelization, the idea of model parallelism is to spread layers or groups of layers across multiple GPUs. In PyTorch, this is done by moving the layers (and data right before it reaches the layer) with the \lstinline{.to()} method to the desired device.
+Also called vertical data parallelization, the idea of model parallelism is to spread layers or groups of layers across multiple \GLS{GPU}s. In PyTorch, this is done by moving the layers (and data right before it reaches the layer) with the \lstinline{.to()} method to the desired device.
 \begin{figure}[h!]
   \center
   \includegraphics[width=0.5\linewidth]{images/2022-08-24-18-23-26.png}
-  \caption{We split our models vertically, separating groups of layers in multiple GPUs}
+  \caption{We split our models vertically, separating groups of layers in multiple \GLS{GPU}s}
 \end{figure}
 \FloatBarrier
-Note that there is an information overhead when the data transit from one GPU to another, especially if the GPUs are not on the same node. Also, to be able to compute the loss, we often need to send the data back to the first layer where the label are once the last layer is done.
+Note that there is an information overhead when the data transit from one \GLS{GPU} to another, especially if the \GLS{GPU}s are not on the same node. Moreover, to be able to compute the loss, we often need to send the data back to the first layer where the labels are once the last layer is done.
 
-The main advantage of model parallelism is that it allows for bigger model to be trained, as the GPUs share the memory load. However, all but one GPU is idle at any given time and it has an overhead of copying the data between the devices (especially if they are not on the same node). Remark that it is better to have a 24GB card instead of 4x6GB cards using this parallelism paradigm.
+The main advantage of model parallelism is that it allows for bigger model to be trained, as the \GLS{GPU}s share the memory load. However, all but one \GLS{GPU} is idle at any given time and it has an overhead of copying the data between the devices (especially if they are not on the same node). Remark that it is better to have a 24GB card instead of 4x6GB cards using this parallelism paradigm.
 
 \subsubsection{Pipeline parallelism (PP)}
-This technique is very similar to the previous one, except that we artificially introduce a pipeline to use all GPUs concurrently. Let's compare a typical forward and backward pass. First, here is the flow for a simple model parallelism:
+This technique is very similar to the previous one, except that we artificially introduce a pipeline to use all \GLS{GPU}s concurrently. Let's compare a typical forward and backward pass. First, here is the flow for a simple model parallelism:
 
 \begin{figure}[h!]
   \center
   \includegraphics[width=0.7\linewidth]{images/2022-08-25-09-22-17.png}
-  \caption{Notice the poor use of each GPU}
+  \caption{Notice the poor use of each \GLS{GPU}}
 \end{figure}
 \FloatBarrier
 
-Pipeline parallelism creates mini-batches of data to keep most of the GPUs running most of the time.
+Pipeline parallelism creates mini-batches of data to keep most of the \GLS{GPU}s running most of the time.
 
 \begin{figure}[h!]
   \center
@@ -201,10 +206,10 @@ Pipeline parallelism creates mini-batches of data to keep most of the GPUs runni
 \end{figure}
 \FloatBarrier
 
-The idle parts are referred to as the "bubble". This method introduces a new parameter, the \textit{chunks}, that define how many chunks of data are sent in a sequence through the same pipe stage (the chunk is 4 in the image above). Adding a layer of data parallelism over the pipeline parallelism, we need to distinguish between mini-batches and micro-batches. The global data is first split into mini-batches as usual (e.g. a batch size of 1024 gets split up into 4 mini-batches of 256 each). The pipeline then splits each mini-batches by the number of chucks to obtain a micro-batch (e.g. 32 chunks yield micro-batches of size 8, continuing on the example above). Each stage works with a single micro-batch at a time. One needs to be careful when choosing those sizes: too small and the GPUs won't be used enough, too big and the micro-batches become too tiny.
+The idle parts are referred to as the "bubble". This method introduces a new parameter, the \textit{chunks}, that define how many chunks of data are sent in a sequence through the same pipe stage (the chunk is 4 in the image above). Adding a layer of data parallelism over the pipeline parallelism, we need to distinguish between mini-batches and micro-batches. The global data is first split into mini-batches as usual (e.g. a batch size of 1024 gets split up into 4 mini-batches of 256 each). The pipeline then splits each mini-batches by the number of chucks to obtain a micro-batch (e.g. 32 chunks yield micro-batches of size 8, continuing on the example above). Each stage works with a single micro-batch at a time. One needs to be careful when choosing those sizes: too small and the \GLS{GPU}s won't be used enough, too big and the micro-batches become too tiny.
 
 \subsubsection{Tensor parallelism (TP)}
-In tensor parallelism, each GPU processes only a slice of a tensor. The full tensor is aggregated only for operations that require the whole thing. Let's take a quick detour through linear algebra to better understand it.
+In tensor parallelism, each \GLS{GPU} processes only a slice of a tensor. The full tensor is aggregated only for operations that require it as a whole unit. Let's take a quick detour through linear algebra to better understand it.
 
 If we have two matrices for which we want to find the dot product, it is possible to split either column-wise or row-wise. For example, the following product
 
@@ -247,18 +252,18 @@ and by splitting matrix \(A\) by rows and matrix \(B\) by columns before summing
   Y=Y_1+Y_2
 \end{gather*}
 
-Using these techniques, we can then split a weight matrix \(A\) column-wise across \(N\) GPUs and perform the matrix multiplications in parallel. It is also possible to feed them into an activation function independently.
+Using these techniques, we can then split a weight matrix \(A\) column-wise across \(N\) \GLS{GPU}s and perform the matrix multiplications in parallel. It is also possible to feed them into an activation function independently.
 
 \begin{figure}[h!]
   \center
-  \includegraphics[width=0.5\linewidth]{images/2022-08-25-10-04-26.png}
-  \caption{Example of tensor parallelism, through the activation function (credit: https://huggingface.co/docs/transformers/v4.16.2/en/parallelism)}
+  \includegraphics[width=0.4\linewidth]{images/2022-08-25-10-04-26.png}
+  \caption{Example of tensor parallelism, through the activation function}
 \end{figure}
 \FloatBarrier
 
 We need to synchronize only at the end, where the output vector has to be reconstructed.
 
-One major issue unfortunately is that tensor parallelism requires a fast transfer of data. It is thus not advisable to do tensor parallelism over more than one node.
+One major issue unfortunately is that tensor parallelism requires a fast transfer of data. It is thus not advisable to do tensor parallelism over more than one node (i.e. device).
 
 \subsubsection{Combinations}
 There are many ways to combine the parallelism tools seen above. Some will be detailed in greater details later. Usually, these methods are implemented by known frameworks such as DeepSpeed, Megatron-LM, SageMaker or OSLO.
@@ -266,19 +271,19 @@ There are many ways to combine the parallelism tools seen above. Some will be de
 \subsubsection{Which methods should I use?}
 It is almost impossible to give a straight answer, as the best techniques to use will always depend on many factors such as the size of the model, the compute time available, the compute ressources at disposition and of course the price one is willing to pay to train his model. However, here are a few guidelines:
 \begin{itemize}
-  \item Single GPU
+  \item Single \GLS{GPU}
   \begin{enumerate}
-    \item Model fits onto a single GPU: no parallelization necessary
-    \item Model doesn't fit onto a single GPU: ZeRO + Offload CPU
-    \item Largest layer doesn't fit into a single GPU: Memory Centric Tiling*
+    \item Model fits onto a single \GLS{GPU}: no parallelization necessary
+    \item Model doesn't fit onto a single \GLS{GPU}: ZeRO + Offload CPU
+    \item Largest layer doesn't fit into a single \GLS{GPU}: Memory Centric Tiling*
   \end{enumerate}
-  \item Single Node / Multi-GPU
+  \item Single Node / Multi-\GLS{GPU}
   \begin{enumerate}
-    \item Model fits onto a single GPU: Distributed DP / ZeRO
-    \item Model doesn't fit onto a single GPU: PP / ZeRO / TP
-    \item Largest layer doesn't fit into a single GPU: ZeRO / TP
+    \item Model fits onto a single \GLS{GPU}: Distributed DP / ZeRO
+    \item Model doesn't fit onto a single \GLS{GPU}: PP / ZeRO / TP
+    \item Largest layer doesn't fit into a single \GLS{GPU}: ZeRO / TP
   \end{enumerate}
-  \item Multi-node / Multi-GPU
+  \item Multi-node / Multi-\GLS{GPU}
   \begin{enumerate}
     \item ZeRO (simplest) / PP+TP+DP (massive changes to the model)
   \end{enumerate}
@@ -297,15 +302,15 @@ In PyTorch, the \lstinline{torch.distributed} package contains much of the utili
 \subsubsection{Data Parallel Training Paradigm}
 When working on projects that are expected to gradually grow in complexity, a common development strategy is as follows:
 \begin{enumerate}
-  \item Single-machine single-GPU training: default behaviour
-  \item Single-machine multi-GPU training: DataParallel module
-  \item Single-machine multi-GPU distributed training: DistributedDataParallel module
-  \item Multi-machine multi-GPU distributed training: DistributedDataParallel module, additional scripting required
-  \item Dynamic multi-machine multi-GPU distributed training: elastic package
+  \item Single-machine single-\GLS{GPU} training: default behaviour
+  \item Single-machine multi-\GLS{GPU} training: DataParallel module
+  \item Single-machine multi-\GLS{GPU} distributed training: DistributedDataParallel module
+  \item Multi-machine multi-\GLS{GPU} distributed training: DistributedDataParallel module, additional scripting required
+  \item Dynamic multi-machine multi-\GLS{GPU} distributed training: elastic package
 \end{enumerate}
 
 \section{Data-Parallel Training}
-\lstinline{nn.parallel.DataParallel} is the simplest package to allow parallelism during the training process, as it requires only minor additional code (one line is often enough). However, it does not offer the best performance as it replicates the model in every forward pass. The major issue is that it is a single-process multi-thread parallelism that bounds the speed due the infamous \Gls{GIL} single-lock.
+\lstinline{nn.parallel.DataParallel} is the simplest package to allow parallelism during the training process, as it requires only minor additional code (one line is often enough). However, it does not offer the best performances as it replicates the model in every forward pass. The major issue is that it is a single-process multi-thread parallelism that bounds the speed due the infamous \Gls{GIL} single-lock.
 
 \subsection{Using DP on a model}
 The package \lstinline{DataParallel} handles everything on its own. To allow data parallelization on a model in PyTorch, one must simply tell PyTorch to use the module on a given model. We can also indicate which devices to use using the \lstinline{device_ids} parameter:
@@ -321,10 +326,10 @@ While being harder to setup and use, the package \lstinline{nn.parallel.Distribu
   \item Each process contains an independent Python interpreter, thus avoiding the GIL single-lock and making heavy use of the Python runtime
 \end{itemize}
 
-The second advantage is that \lstinline{dataParallel} is \gls{multithreading} while \lstinline{distributedDataParallel} is \gls{multiprocessing}. This can make a huge difference in Python.
+The second advantage is that \lstinline{dataParallel} is \gls{multithreading} while \lstinline{distributedDataParallel} is \gls{multiprocessing}. This can and does make a huge difference in Python.
 
 \subsection{Understanding the backends}
-The \lstinline{torch.distributed} package supports three built-in backends that allow the transport of data across multiple processes and/or machines. This part is important only for people who want or need to dig deeper into the parallelism world, and can be skipped otherwise.
+The \lstinline{torch.distributed} package supports three built-in backends that allow the transport of data across multiple processes and/or nodes. This part is important only for readers who want or need to dig deeper into the parallelism world, and can be skipped otherwise.
 
 \subsubsection{MPI}
 MPI (Message Passing Interface) is a library standard for programming distributed memory. MPI is portable and fast, as it has been implemented and optimized on almost all architectures and hardwares. It has language bindings for Fortran, C and C++ and several MPI modules exist in Python.
@@ -344,27 +349,27 @@ An MPI communicator is a "communication universe" for a group of processes. The 
 \paragraph{Handling the process rank}
 As seen at the beginning, a rank is used to distinguish a process from the others: it is a unique integer value assigned to a process within a communicator. Here is a classical way to setup and use ranks with MPI (in C):
 \begin{lstlisting}[language=C]
-  int size, rank;
-  MPI_Comm_size(MPI_COMM_WORLD, &size);
-  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-  // The root node has usually rank 0
-  if(rank == 0) {...}
+int size, rank;
+MPI_Comm_size(MPI_COMM_WORLD, &size);
+MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+// The root node has usually rank 0
+if(rank == 0) {...}
 \end{lstlisting}
 
 \paragraph{Initiating and closing a computation}
 Among the most important MPI commands are those used for initiating and closing a computation:
 \begin{lstlisting}[language=C]
-  int main(int argc, char** argv) {
-    MPI_Init(&argc, &argv); // initiates an MPI computation
-    ...
-    MPI_Finalize(); // terminates the MPI computation and cleans up
-  }
+int main(int argc, char** argv) {
+  MPI_Init(&argc, &argv); // initiates an MPI computation
+  ...
+  MPI_Finalize(); // terminates the MPI computation and cleans up
+}
 \end{lstlisting}
 
 \paragraph{Synchronization}
 Often, parallel algorithms require that no process continues on before all the processes have reached a certain state at certains points in the program. For that, it is possible to ask for explicit synchronization:
 \begin{lstlisting}[language=C]
-  int MPI_Barrier(MPI_Comm comm);
+int MPI_Barrier(MPI_Comm comm);
 \end{lstlisting}
 
 \paragraph{Blocking communication}
@@ -372,20 +377,20 @@ In MPI, communication consists of sending a copy of the data to another process.
 
 More strictly speaking, MPI defines a function that performs blocking send:
 \begin{lstlisting}[language=C]
-  int MPI_Send(const void *buf, int count, MPI_Datatype datatype, int dest, int tag, MPI_Comm comm)
+int MPI_Send(const void *buf, int count, MPI_Datatype datatype, int dest, int tag, MPI_Comm comm)
 \end{lstlisting}
 where \lstinline{buf}, \lstinline{count} and \lstinline{datatype} define the message buffer (the \textit{data}), \lstinline{dest} and \lstinline{comm} identify the destination process. The \lstinline{tag} parameter is optional. The last three described are collectively called the \textit{envelope} The message gets sent and the buffer empties out before the function exits.
 On the other end, a function performs a blocking receive:
 \begin{lstlisting}[language=C]
-  int MPI_Recv(void *buf, int count, MPI_Datatype datatype, int source, int tag, MPI_Comm comm, MPI_Status *status)
+int MPI_Recv(void *buf, int count, MPI_Datatype datatype, int source, int tag, MPI_Comm comm, MPI_Status *status)
 \end{lstlisting}
 This function waits for a message from \lstinline{source} and \lstinline{comm} and once received stores it into the buffer defined by \lstinline{buf}, \lstinline{count} and \lstinline{datatype}. One can used \lstinline{MPI_ANY_SOURCE} to receive from any source and/or \lstinline{MPI_ANY_TAG} to receive from any tag. Note that receiving fewer \lstinline{datatype} elements than \lstinline{count} is fine, but receiving more results in an error. The \lstinline{status} is a useful structure that contains information about (for example) the source (\lstinline{status.MPI_SOURCE}) or the tag (\lstinline{status.MPI_TAG}).
 
 \paragraph{Non-blocking communication}
 Of course, non-blocking communications are also possible: the following methods return immediately, and the computation and communication can be overlapped:
 \begin{lstlisting}[language=C]
-  int MPI_Isend(const void *buf, int count, MPI_Datatype datatype, int dest, int tag, MPI_Comm comm, MPI_Request *request)
-  int MPI_Irecv(void *buf, int count, MPI_Datatype datatype, int source, int tag, MPI_Comm comm, MPI_Request *request)
+int MPI_Isend(const void *buf, int count, MPI_Datatype datatype, int dest, int tag, MPI_Comm comm, MPI_Request *request)
+int MPI_Irecv(void *buf, int count, MPI_Datatype datatype, int source, int tag, MPI_Comm comm, MPI_Request *request)
 \end{lstlisting}
 
 \paragraph{Collective communication}
@@ -394,7 +399,7 @@ Collective communication refers to the process of synchronizing and moving data 
 \begin{itemize}
   \item Broadcasting: share data from the process with rank root to all other processes of the communicator including the root process
   \begin{lstlisting}[language=C]
-    int MPI_Bcast(void *buf, int count, MPI_Datatype datatype, int root, MPI_Comm comm)
+int MPI_Bcast(void *buf, int count, MPI_Datatype datatype, int root, MPI_Comm comm)
   \end{lstlisting}
   \begin{figure}[h!]
     \center
@@ -404,7 +409,7 @@ Collective communication refers to the process of synchronizing and moving data 
   \FloatBarrier
   \item Scattering: send a fraction of data to each node
   \begin{lstlisting}[language=C]
-    int MPI_Scatter(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, MPI_Comm comm)
+int MPI_Scatter(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, MPI_Comm comm)
   \end{lstlisting}
   \begin{figure}[h!]
     \center
@@ -414,7 +419,7 @@ Collective communication refers to the process of synchronizing and moving data 
   \FloatBarrier
   \item Gathering: retrieve a portion of data from different processes
   \begin{lstlisting}[language=C]
-    int MPI_Gather(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, MPI_Comm comm)
+int MPI_Gather(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount, MPI_Datatype recvtype, int root, MPI_Comm comm)
   \end{lstlisting}
   \begin{figure}[h!]
     \center
@@ -424,7 +429,7 @@ Collective communication refers to the process of synchronizing and moving data 
   \FloatBarrier
   \item Reducing: retrieve a portion of data from different processes and manipulate it directly
   \begin{lstlisting}[language=C]
-    int MPI_Reduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm)
+int MPI_Reduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, MPI_Comm comm)
   \end{lstlisting}
   \begin{figure}[h!]
     \center
@@ -435,7 +440,7 @@ Collective communication refers to the process of synchronizing and moving data 
 \end{itemize}
 
 \subsubsection{NCCL}
-NCCL (for NVIDIA Collective Communications Library, pronounced "Nickel") is a library providing inter-GPU communication functions (called primitives). Like MPI, it implements both point-to-point send/receive and collective communication primitives. However, contrary to MPI, it is not a parallel programming framework, but aims at accelerating inter-GPU communication. NCCL implements each collective communication primitives in a single kernel handling both communications and computation operations, allowing for fast synchronization and minimizing the resources needed to reach peak bandwidth. This tool works on any multi-GPU parallelization model (e.g. single-threaded control of all GPUs, multi-threaded (one thread per GPU), multi-process with MPI, ...).
+NCCL (for NVIDIA Collective Communications Library, pronounced "Nickel") is a library providing inter-\GLS{GPU} communication functions (called primitives). Like MPI, it implements both point-to-point send/receive and collective communication primitives. However, contrary to MPI, it is not a parallel programming framework, but aims at accelerating inter-\GLS{GPU} communication. NCCL implements each collective communication primitives in a single kernel handling both communications and computation operations, allowing for fast synchronization and minimizing the resources needed to reach peak bandwidth. This tool works on any multi-\GLS{GPU} parallelization model (e.g. single-threaded control of all \GLS{GPU}s, multi-threaded (one thread per \GLS{GPU}), multi-process with MPI, ...).
 
 NCCL possesses a C API, accessible from multiple programming languages and follows the MPI collectives API. The most important modification is the presence of a \lstinline{stream} argument providing direct integration with the CUDA programming model.
 
@@ -475,22 +480,22 @@ Let's draw the schema for the primitives that haven't been covered yet:
 \end{itemize}
 
 \paragraph{A bit more theory into how NCCL works}
-NCCL is a topology-aware ring-based library, implemented as monolithic CUDA C++ kernels with three primitive operations (Copy, Reduce and ReduceAndCopy). Ring-based means that a GPU is connected to its following one, forming a ring-like structure:
+NCCL is a topology-aware ring-based library, implemented as monolithic CUDA C++ kernels with three primitive operations (Copy, Reduce and ReduceAndCopy). Ring-based means that a \GLS{GPU} is connected to its following one, forming a ring-like structure:
 
 \begin{figure}[h!]
   \center
-  \includegraphics[width=0.6\linewidth]{images/2022-09-07-15-37-09.png}
-  \caption{Example of a ring-based collective (credit: https://images.nvidia.com/events/sc15/pdfs/NCCL-Woolley.pdf)}
+  \includegraphics[width=0.75\linewidth]{images/2022-09-07-15-37-09.png}
+  \caption{Example of a ring-based collective}
 \end{figure}
 \FloatBarrier
 
 \subsubsection{Gloo}
-Gloo is a collective communications library hosted by the Meta Incubator (yes, the same Meta as Facebook). Its library offers many distributed algorithms: when applicable, these algorithms have an implementation that works with system memory buffers, and one that works with Nvidia GPU memory buffers (using CUDA and NCCL). In the latter case, it is not necessary to copy memory between host and device.
+Gloo is a collective communications library hosted by the Meta Incubator (yes, the same Meta as Facebook). Its library offers many distributed algorithms: when applicable, these algorithms have an implementation that works with system memory buffers, and one that works with Nvidia \GLS{GPU} memory buffers (using CUDA and NCCL). In the latter case, it is not necessary to copy memory between host and device.
 
 The first thing the Gloo framework does is called the \emph{rendezvous}: the nodes find each other and setup connections between them (full mesh, i.e. bidirectional communication, or some subset). A \lstinline{gloo::Context} class retains information about all the participating processes (the ranks) and the persistent communication channels. Gloo does not maintain global state or thread-local state, meaning one can setup as many contexts as needed!
 
 The algorithms available in Gloo are the following:
-\begin{itemize}
+\begin{itemize}[noitemsep]
   \item AllReduce (see NCCL above)
   \item Reduce-Scatter (see NCCL above)
   \item Broadcast (see MPI above)
@@ -519,7 +524,7 @@ If the reader wants to focus on writing distributed Machine Learning models, thi
 \[\begin{array}{l|ll|ll|ll}
   \text{Backend} & \text{\lstinline{gloo}} & & \text{\lstinline{mpi}} & & \text{\lstinline{nccl}} \\
   \hline\hline
-  \text{Device} & \text{CPU} & \text{GPU} & \text{CPU} & \text{GPU} & \text{CPU} & \text{GPU} \\
+  \text{Device} & \text{CPU} & \text{\GLS{GPU}} & \text{CPU} & \text{\GLS{GPU}} & \text{CPU} & \text{\GLS{GPU}} \\
   \hline
   \text{send} & \checkmark & \chi & \checkmark & \checkmark & \chi & \checkmark \\
   \text{recv} & \checkmark & \chi & \checkmark & \checkmark & \chi & \checkmark \\
@@ -539,96 +544,335 @@ Gloo is considered a good backend for development purposes: it is included in th
 
 NCCL is included in the pre-built binaries with CUDA support, and offers the best performance with CUDA tensors. It can however be a bit more tricky to setup depending on one's installation.
 
-Finally, MPI is \textit{the} standardized backend. Several implementations exist and each of them is optimized for different purposes. The major issue is that PyTorch binaries cannot include an MPI implementation, and so the user has to compile it by hand. %TODO: explain how to compile with MPI
+Finally, MPI is \textit{the} standardized backend. Several implementations exist and each of them is optimized for different purposes. The major issue is that PyTorch binaries cannot include an MPI implementation, and so the user has to compile it by hand. A section in the annex explains how to build PyTorch with MPI.
 
-\subsubsection{Initiating the processes}
+\subsubsection{Generic setup code}
+While processes using the \lstinline{torch.multiprocessing} are restricted to be executed on the same machine, the \lstinline{torch.distributed} uses the different communication backends to allow multiple machines (nodes) to inter-communicate. The  code shown below is one example of how one can set up his distributed environment: note that it will in the end depends on the developers and the project.
 
-\subsubsection{Point-to-Point communication}
-
-\subsubsection{Collective communication}
-
-\subsection{The \texorpdfstring{\lstinline{distributedDataParallel}}{distributedDataParallel} module}
-The most important function in this package is the constructor itself. This container parallelizes the application of the given module by splitting the input across the specified devices by chunking in the batch dimension. The module is replicated on each machine, and every replica handles a portion of the input. During the backwards pass, gradients from each node are averaged. This means that the batch size should be larger than the number of GPUs used locally.
+\paragraph{Initiating the processes}
+We will create a \lstinline{run} method where we write the distributed function. This function is then passed as an argument to the function initiating all processes:
 
 \begin{lstlisting}[language=Python]
-  from torch.nn.parallel import DistributedDataParallel as DDP
-  ddp_model = DDP(model, device_ids=[rank])
+def init_process(rank, size, func, backend):
+  os.environ['MASTER_ADDR'] = '192.168.1.10' # IP address of master node
+  os.environ['MASTER_PORT'] = '29500' # Port of master node
+  # Processes share their locations to allow communication
+  dist.init_process_group(backend, rank=rank, world_size=size)
+  func(rank, size)
+\end{lstlisting}
+
+Note that the master node is the one that hosts the process with rank 0. We will dive deeper in the \lstinline{init_process_group} function in the next section using the \lstinline{distributedDataParallel} package.
+
+\paragraph{Generating and starting the processes}
+\begin{lstlisting}[language=Python]
+if __name__ == '__main__':
+  size = 2 # World size
+  processes = [] # We keep track of our processes
+  mp.set_start_method("spawn")
+  # Generate a process for each rank (from 0 to size - 1)
+  for rank in range(size):
+      # Using the Gloo backend
+      p = mp.Process(target=init_process, args=(rank, size, run, "gloo"))
+      p.start()
+      processes.append(p)
+
+  for p in processes:
+      p.join()
+\end{lstlisting}
+
+The \lstinline{torch.multiprocessing.Process} class follows the API of the Python \lstinline{threading.Thread}. We create it giving the target function and the arguments we want to send to this function.
+
+\subsubsection{Point-to-Point communication}
+Point-to-Point communication consists of transferring data from one process to another. Two groups of methods are available, that is the blocking ones and the immediate (non-blocking) ones. In the case of the blocking functions, both processes stop until the communication is completed:
+
+\begin{lstlisting}[language=Python]
+def run(rank, size):
+  tensor = torch.zeros((2, 2))
+  if rank == 0:
+      tensor += 1
+      # Send the tensor to process 1
+      dist.send(tensor=tensor, dst=1)
+  else:
+      # Receive tensor from process 0
+      dist.recv(tensor=tensor, src=0)
+  print('Rank ', rank, ' has data ', tensor[0])
+\end{lstlisting}
+Note how the tensor for the process 1 is never changed in the code it has access to! However, the result shows that it correctly received the modified tensor:
+\begin{lstlisting}
+Rank  1  has data  tensor([1., 1.])
+Rank  0  has data  tensor([1., 1.])
+\end{lstlisting}
+Also, the destination process \lstinline{dst} is specified in the \lstinline{send} method, while the source process \lstinline{src} is specified in the \lstinline{recv} function.
+
+In the case of non-blocking immediate functions, the programs continues its execution and the methods return a special object \lstinline{Work} on which we choose to call the \lstinline{wait} once we want to use it. One must however be careful when using immediate functions: modifying the tensor during the communication will result in undefined behaviour!
+
+\begin{lstlisting}[language=Python]
+def run(rank, size):
+  tensor = torch.zeros((2, 2))
+  req = None
+  if rank == 0:
+      tensor += 1
+      # Send the tensor to process 1
+      req = dist.isend(tensor=tensor, dst=1)
+  else:
+      # Receive tensor from process 0
+      req = dist.irecv(tensor=tensor, src=0)
+  req.wait()
+  print('Rank ', rank, ' has data ', tensor[0])
+\end{lstlisting}
+
+We get the same result as above. Note how the \lstinline{req} object is defined as \lstinline{None} for all processes and then assigned specifically.
+
+\subsubsection{Collective communication}
+As we saw, point-to-point communication specifies a sender and a receiver. Collective communication allows for communication across all processes that are inside the same group (in MPI, we talked about a communicator). For example, we can create the group containing both process 0 and 1:
+\begin{lstlisting}[language=Python]
+group = dist.new_group([0, 1])
+\end{lstlisting}
+Exactly like in MPI, the default group consists of the whole world. PyTorch implements a total of 6 collectives (i.e. communicative operations). They are listed here under, but one can find more details about them in the section about the backends:
+\begin{itemize}[noitemsep]
+  \item \lstinline{dist.broadcast(tensor, src, group)}: copies \lstinline{tensor} from \lstinline{src} to all processes
+  \item \lstinline{dist.reduce(tensor, dst, op, group)}: applies \lstinline{op} to every \lstinline{tensor} and stores the result in \lstinline{dst}
+  \item \lstinline{dist.all_reduce(tensor, op, group)}: same as reduce, with the result stored in all processes
+  \item \lstinline{dist.scatter(tensor, scatter_list, src, group)}: copies the \(i\)-th tensor \lstinline{scatter_list[i]} to the \(i\)-th process
+  \item \lstinline{dist.gather(tensor, gather_list, dst, group)}: copies \lstinline{tensor} from all processes in \lstinline{dst}
+  \item \lstinline{dist.all_gather(tensor_list, tensor, group)}: copies \lstinline{tensor} from all processes to \lstinline{tensor_list}, on all processes
+  \item \lstinline{dist.barrier(group)}: blocks all processes in \lstinline{group} until each one has entered this function
+\end{itemize}
+
+\paragraph{A note on the reduce operations}
+PyTorch implements 4 type of reduce operations, that are stored in the \lstinline{dist.ReduceOp} object:
+\begin{itemize}[noitemsep]
+  \item \lstinline{dist.ReduceOp.SUM}
+  \item \lstinline{dist.ReduceOp.PRODUCT}
+  \item \lstinline{dist.ReduceOp.MAX}
+  \item \lstinline{dist.ReduceOp.MIN}
+\end{itemize}
+
+\paragraph{Example with scattering}
+Let's get ahead and write an example for the \lstinline{dist.scatter} collective. We first create a group and initialize a tensor. The scatter methods takes a tensor as its first parameter: this is where the scattered tensor will be stored. The second parameters \lstinline{scatter_list} must only be specified by the process that sends the tensors! The others processes must have \lstinline{None} (default value) for this parameter. The third is the source process and finally here the last is the communication group.
+
+\begin{lstlisting}[language=Python]
+def run(rank, size):
+  group = dist.new_group([0, 1])
+  tensor = torch.zeros(2)
+  if rank == 0:
+      scatter_tensors = [torch.tensor([0., 1.]), torch.tensor([2., 3.])]
+      dist.scatter(tensor, scatter_tensors, src=0, group=group)
+  else:
+      dist.scatter(tensor, None, src=0, group=group)
+  print('Rank ', rank, ' has data ', tensor)
+\end{lstlisting}
+We thus get the expected result, i.e.:
+\begin{lstlisting}
+Rank  0  has data  tensor([0., 1.])
+Rank  1  has data  tensor([2., 3.])
+\end{lstlisting}
+
+\paragraph{Example with reducing}
+One more example for the road! This time, let's write a very simple reducing operation. We set up our group, generate some tensors using the rank and run a \lstinline{dist.reduce} collective, using the \lstinline{dist.ReduceOp.PRODUCT} operation:
+\begin{lstlisting}[language=Python]
+def run(rank, size):
+  group = dist.new_group([0, 1])
+  tensor = torch.tensor([rank + 1, rank + 10])
+  dist.reduce(tensor, dst=0, op=dist.ReduceOp.PRODUCT, group=group)
+  print('Rank ', rank, ' has data ', tensor)
+\end{lstlisting}
+The process with rank 1 shouldn't see its tensor being changed, but the root process should have the multiplication of all tensors. This is indeed what we observe:
+\begin{lstlisting}
+Rank  1  has data  tensor([2, 11])
+Rank  0  has data  tensor([2, 110])
+\end{lstlisting}
+The rank 0 process gets the tensor \([1, 10]\cdot [2, 11]\) where \(\cdot \) represents an element-wise product.
+
+\subsection{The \texorpdfstring{\lstinline{distributedDataParallel}}{distributedDataParallel} module}
+The most important function in this package is the constructor itself. This container parallelizes the application of the given module by splitting the input across the specified devices by chunking in the batch dimension. The module is replicated on each machine, and every replica handles a portion of the input. During the backwards pass, gradients from each node are averaged. This means that the batch size should be larger than the number of \GLS{GPU}s used locally.
+
+\begin{lstlisting}[language=Python]
+from torch.nn.parallel import DistributedDataParallel as DDP
+ddp_model = DDP(model, device_ids=[rank])
 \end{lstlisting}
 
 \subsubsection{Torch \texorpdfstring{\lstinline{multiprocessing}}{multiprocessing} package}
 The \lstinline{torch.multiprocessing} package wraps the native \lstinline{multiprocessing} module of Python. I won't enter into details here, instead I want to introduce a very important function, the \lstinline{spawn} method:
 \begin{lstlisting}[language=Python]
-  torch.multiprocessing.spawn(func, args=(), nprocs, join, daemon, start_method='spawn')
+torch.multiprocessing.spawn(func, args=(), nprocs, join, daemon, start_method='spawn')
 \end{lstlisting}
 As its name entails, this method \textit{spawns} (i.e. creates or generates) \lstinline{nprocs} processes that each run the given function \lstinline{func} with the arguments \lstinline{args}. The function is called as \lstinline{func(i, *args)}, where \lstinline{i} is the index of the process (sounds like the rank, doesn't it?) and where the \lstinline{args} tuple is deconstructed to give each element as a parameter directly. The \lstinline{join} argument allows to perform a blocking join on all processes. If set to \lstinline{false}, a \lstinline{ProcessContext} is returned by the method and the joining has to be done manually. Note that the last argument \lstinline{start_method} is deprecated, you should not change its default value.
 
-\subsubsection{Initiating and destroying the group}
-Each process has to know which distributed process group it is a part of. For that, a good practice is to create a setup function to prepare the environment and initiate the group. This function is run for each process. For instance:
+\subsubsection{Initiating the group}
+Each process has to know which distributed process group it is a part of. For that, a good practice is to create a setup function to prepare the environment and initiate the group. This is the same function as \lstinline{init_process} in the section about distributed applications. This function is run for each process. For instance:
 \begin{lstlisting}[language=Python]
-  def setup(rank, world_size):
-    os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ['MASTER_PORT'] = '12355'
-    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+def setup(rank, world_size, backend):
+  os.environ['MASTER_ADDR'] = '192.168.1.10'
+  os.environ['MASTER_PORT'] = '12355'
+  dist.init_process_group(backend, rank=rank, world_size=world_size)
 \end{lstlisting}
 This very simple example sets the master's IP address and port, and prepares the process giving it the backend used, its rank and the world size.
 The method used is the following:
 \begin{lstlisting}[language=Python]
-  torch.distributed.init_process_group(backend, init_method, timeout, world_size, rank, store, group_name, pg_options)
+torch.distributed.init_process_group(backend, init_method, timeout, world_size, rank, store, group_name, pg_options)
 \end{lstlisting}
 In the example above, we initialize a process group explicitly, but it is also possible to specify an \lstinline{init_method} which indicates how to discover the peers. The \lstinline{store} parameter, mutually exclusive with the \lstinline{init_method} serves as the key/value store accessible to all workers and is used to interchange connection and/or address information.
 
+\paragraph{Using a shared file system}
+Sometimes, it is useful to allow all processes to access a shared file system: they will open the file, write their information and then wait for every processes to complete the same steps. Note that the file system must support locking through \lstinline{fcntl} to avoid race conditions.
+
+\begin{lstlisting}[language=Python]
+dist.init_process_group(init_method='file:///mnt/nfs/sharedfile', rank=rank, world_size=size)
+\end{lstlisting}
+
+\paragraph{Using TCP}
+It is also possible to directly indicate the IP address of the root node (the one owning the process with rank 0) and the port number. All workers (the non-root nodes) will be able to connect to the root process (rank 0) and exchange their information on how to reach one another.
+
+\begin{lstlisting}[language=Python]
+dist.init_process_group(init_method='tcp://192.168.1.10:23456', rank=rank, world_size=size)
+\end{lstlisting}
+
+\subsubsection{Destroying the group}
 At the end of the training, it is good practice to destroy the process group and deinitialize the distributed package;
 \begin{lstlisting}[language=Python]
-  def cleanup():
-    dist.destroy_process_group()
+def cleanup():
+  dist.destroy_process_group()
 \end{lstlisting}
 
 \subsubsection{Complete (simple) example}
 Let's go through a complete example of a model that uses the \lstinline{DistributedDataParallel} package:
 \begin{lstlisting}[language=Python]
-  # Imports and hyperparameters ...
+# Imports and hyperparameters ...
 
-  def setup(rank, world_size):
-      os.environ['MASTER_ADDR'] = 'localhost'
-      os.environ['MASTER_PORT'] = '12355'
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
 
-      dist.init_process_group("gloo", rank=rank, world_size=world_size)
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
 
-  def cleanup():
-      dist.destroy_process_group()
+def cleanup():
+    dist.destroy_process_group()
 
-  class Net(nn.Module):
-      # Model ...
+class Net(nn.Module):
+    # Model ...
 
-  def main(rank, world_size):
-      setup(rank, world_size)
+def main(rank, world_size):
+    setup(rank, world_size)
 
-      model = Net().cuda(rank)
-      ddp_model = DDP(model, device_ids=[rank])
-      torch.cuda.set_device(rank)
+    model = Net().cuda(rank)
+    ddp_model = DDP(model, device_ids=[rank])
+    torch.cuda.set_device(rank)
 
-      train_dataset = datasets.MNIST('./data/', download=True, train=True, transform=transform)
-      train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, num_replicas=world_size, rank=rank, shuffle=False)
-      train_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=False, pin_memory=True, sampler=train_sampler)
+    train_dataset = datasets.MNIST('./data/', download=True, train=True, transform=transform)
+    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, num_replicas=world_size, rank=rank, shuffle=False)
+    train_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=False, pin_memory=True, sampler=train_sampler)
 
-      criterion = nn.NLLLoss()
-      optimizer = optim.SGD(ddp_model.parameters(), lr=learning_rate)
+    criterion = nn.NLLLoss()
+    optimizer = optim.SGD(ddp_model.parameters(), lr=learning_rate)
 
-      for _ in range(epochs):
-          # Training process ...
-          # Don't forget here to move the tensors to the right process using the .cuda(rank) method!
+    for _ in range(epochs):
+        # Training process ...
+        # Don't forget here to move the tensors to the right process using the .cuda(rank) method!
 
-      cleanup()
+    cleanup()
 
-  def run(fn, world_size):
-      mp.spawn(fn, args=(world_size,), nprocs=world_size, join=True)
+def run(fn, world_size):
+    mp.spawn(fn, args=(world_size,), nprocs=world_size, join=True)
 
-  if __name__ == "__main__":
-      world_size = torch.cuda.device_count()
-      run(main, world_size)
+if __name__ == "__main__":
+    world_size = torch.cuda.device_count()
+    run(main, world_size)
 \end{lstlisting}
 
+\subsection{The ZeRO memory optimizer}
+ZeRO is a breakthrough optimization technology developed by Microsoft for large-scale distributed deep learning. It destroyed the competition by going 3 to 5 times faster, allowing the possibility to efficiently train models with trillions of parameters. It is a part of DeepSpeed, but we will talk about that one a bit later.
+
+ZeRO partitions the model states (i.e. parameters, gradients and optimizer state) across all processes instead of replicating them, thus removing the memory redundancies. It introduced a dynamic communication schedule during training that allows to retain the computational granularity and communication volume of data parallelism. Using the combined optimizer state partitioning, gradient partitioning and parameter partitioning, ZeRO claims to yield a 64x memory reduction compared to classical methods.
+
 \subsection{Let's simplify our work with DeepSpeed}
+We already began hiding the details of the framework away, using the integrated distributed methods from PyTorch. Let's now go deeper into this by adding a layer: DeepSpeed. DeepSpeed is an optimization software, created by Microsoft in 2020 along with ZeRO, that enables huge scaling and speed increase for deep learning models. It is quite easy to setup, especially with an existing PyTorch DistributedDataParallel model.
+
+Let's begin with an example of a simple model using DeepSpeed that I will break down quickly here before diving deeper into the functions and the numerous parameters in the following subsections.
+
+\begin{lstlisting}[language=Python]
+# Usual imports ...
+import deepspeed
+
+def add_argument():
+    parser = argparse.ArgumentParser(description='CIFAR')
+    parser.add_argument('--with_cuda',
+                        default=False,
+                        action='store_true')
+    # Other arguments ...
+    # Include DeepSpeed configuration arguments
+    parser = deepspeed.add_config_arguments(parser)
+    args = parser.parse_args()
+    return args
+
+deepspeed.init_distributed(dist_backend="gloo")
+
+# Transform ...
+
+if torch.distributed.get_rank() != 0:
+    # might be downloading cifar data, let rank 0 download first
+    torch.distributed.barrier()
+
+# Use classical DataLoader and CIFAR10 dataset ...
+
+if torch.distributed.get_rank() == 0:
+    # cifar data is downloaded, indicate other ranks can proceed
+    torch.distributed.barrier()
+
+classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
+
+args = add_argument()
+
+class Net(nn.Module):
+    def __init__(self):
+        # Create the model ...
+
+    def forward(self, x):
+        # ... and the forward method as usual ...
+
+net = Net()
+net.requires_grad_(False)
+
+model_engine, optimizer, trainloader, __ = deepspeed.initialize(args=args, model=net, model_parameters=net.parameters(), training_data=trainset)
+
+criterion = nn.CrossEntropyLoss()
+
+for epoch in range(args.epochs):
+    for i, data in enumerate(trainloader):
+        inputs, labels = data[0].to(model_engine.local_rank), data[1].to(model_engine.local_rank)
+        outputs = model_engine(inputs)
+        loss = criterion(outputs, labels)
+
+        model_engine.backward(loss)
+        model_engine.step()
+\end{lstlisting}
+We can see a few changes compared to the PyTorch way of doing things.
+\begin{itemize}
+  \item The \lstinline{deepspeed.init_distributed()} method is very similar to the \lstinline{torch.distributed.init_process_group()} and does mostly the same job. Note that the default backend is NCCL. It is not necessary to use this function if no modification to the distributed setup are made, as the next function we'll see, \lstinline{deepspeed.initialize()} will automatically initialize the distributed environnement.
+  \item The \lstinline{deepspeed.initialize()} method is the most important: it ensures that all of the necessary setup required is done approprietely (and almost invisibly from the user). It can create and manage not only the model, but also the optimizer, the data loader and the learning rate schedulder (we'll talk much more about these later).
+  \begin{lstlisting}[language=Python]
+model_engine, optimizer, _, _ = deepspeed.initialize(args=args, model=model, model_parameters=model.parameters())
+  \end{lstlisting}
+\end{itemize}
+One quite clever trick used in this example is the usage of the \lstinline{torch.distributed.barrier()} method, that blocks a processus from operating further until all processes received the method. Here, we use it to download all the CIFAR10 data on the root node (with the root process) without having the other processes try to obtain it. Once the data is downloaded, we call the barrier method on the node 0 as well, liberating every node and allowing the program to continue.
+
+\subsubsection{What DeepSpeed is actually doing}
+DeepSpeed is abstracting most of the work away from the developer, but what "work" are we talking about? The answer is: pretty much everything. As stated by the official documentation, "DeepSpeed automatically performs the necessary operations required for distributed data parallel training, in mixed precision, with a pre-defined learning rate scheduler". It ensures that gradients are averaged across all data parallel processes, scales the loss to avoid loss in the gradients and handles the \lstinline{step()} function with a learning rate scheduler.
+
+\subsubsection{The DeepSpeed configuration}
+Most of the configuration for DeepSpeed is located in a file usually called \lstinline{ds_config.json}. We won't discuss \textit{all} of the configuration parameters here (as there are \textit{a lot} of them). Please refer to the official documentation if needed (\href{https://www.deepspeed.ai/docs/config-json/}{DeepSpeed configuration documentation}).
+
+\subsubsection{Launching a DeepSpeed model}
+While not mandatory per se, it is good practice to create a runnable file to launch a model, especially when using a framework such as DeepSpeed. For example, a file called \lstinline{run_ds.sh} contains the following code:
+\begin{lstlisting}[language=bash]
+NUM_NODES=1
+NUM_\GLS{GPU}S=2
+
+deepspeed --num_nodes=${NUM_NODES} --num_\GLS{GPU}s=${NUM_\GLS{GPU}S} deepspeed_model.py \
+	--deepspeed \
+	--deepspeed_config ds_config.json
+\end{lstlisting}
+This is a very straightforward bash file calling \lstinline{deepspeed} with only two parameters, which are the number of nodes and the number of \GLS{GPU}s. We must always indicate the location of the configuration file as well.
 
 \clearpage
 \printglossaries

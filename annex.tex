@@ -1,31 +1,33 @@
 \section{Annex}
 In this section, I will write and briefly describe codes that can be useful in order to attain a better understanding of the backends and the parallelization in PyTorch. I recommend the reader to take some time to experiment and play with them.
 
+It also contains a few brief tutorials for setting one's system up.
+
 \subsection{MPI}
 \subsubsection{Simple send-receive peer-to-peer exchange}
 This first example consists of a simple exchange from a sender to a receiver. We send a number across the devices: rank 0 (root) is the sender and rank 1 will receive and print the result.
 
 \begin{lstlisting}[language=C]
-    #include <mpi.h>
-    #include <stdio.h>
+#include <mpi.h>
+#include <stdio.h>
 
-    int main(int argc, char **argv) {
-        MPI_Init(NULL, NULL);
-        int rank;
-        MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-        int size;
-        MPI_Comm_size(MPI_COMM_WORLD, &size);
+int main(int argc, char **argv) {
+    MPI_Init(NULL, NULL);
+    int rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    int size;
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
 
-        int number;
-        if(rank == 0) {
-            number = 43523;
-            MPI_Send(&number, 1, MPI_INT, 1, 0, MPI_COMM_WORLD);
-        } else if(rank == 1) {
-            MPI_Recv(&number, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            printf("Process 1 received number %d from process 0\n", number);
-        }
-        MPI_Finalize();
+    int number;
+    if(rank == 0) {
+        number = 43523;
+        MPI_Send(&number, 1, MPI_INT, 1, 0, MPI_COMM_WORLD);
+    } else if(rank == 1) {
+        MPI_Recv(&number, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        printf("Process 1 received number %d from process 0\n", number);
     }
+    MPI_Finalize();
+}
 \end{lstlisting}
 
 It is important here to note that the node with rank 1 has not seen what the number is initialized to: one must be careful about what each process knows from the code itself or from what it receives from other nodes.
@@ -37,45 +39,166 @@ Let's go through a quite fun example. We are here trying to approximate \(\pi\) 
 The idea is that each process will compute one element of this sum. We then use \lstinline{MPI_Reduce} with the sum operation to compute \(\frac{\pi}{4}\) and multiply it by 4. The result is sent to the root process defined in the head of the code, and the root process is asked to print the result.
 
 \begin{lstlisting}[language=C]
-    #include <stdio.h>
-    #include <stdlib.h>
-    #include <mpi.h>
-    #include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <mpi.h>
+#include <math.h>
 
-    #define ROOT 0
+#define ROOT 0
 
-    double taylor(const int i, const double x, const double a) {
-        int sign = pow(-1, i);
-        double num = pow(x, 2 * i + 1);
-        double den = a * (2 * i + 1);
-        return (sign * num / den);
-    }
+double taylor(const int i, const double x, const double a) {
+    int sign = pow(-1, i);
+    double num = pow(x, 2 * i + 1);
+    double den = a * (2 * i + 1);
+    return (sign * num / den);
+}
 
-    int main(int argc, char *argv[]) {
-        int nodes, rank;
-        double* partial;
-        double res;
-        double total = 0;
+int main(int argc, char *argv[]) {
+    int nodes, rank;
+    double* partial;
+    double res;
+    double total = 0;
 
-        MPI_Init(&argc, &argv);
-        MPI_Comm_size(MPI_COMM_WORLD, &nodes);
-        MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Init(&argc, &argv);
+    MPI_Comm_size(MPI_COMM_WORLD, &nodes);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
-        res = taylor(rank, 1, 1);
-        printf("rank=%d total=%f\n", rank, res);
+    res = taylor(rank, 1, 1);
+    printf("rank=%d total=%f\n", rank, res);
 
-        MPI_Reduce(&res, &total, 1, MPI_DOUBLE, MPI_SUM, ROOT, MPI_COMM_WORLD);
+    MPI_Reduce(&res, &total, 1, MPI_DOUBLE, MPI_SUM, ROOT, MPI_COMM_WORLD);
 
-        if(rank == ROOT)
-            printf("Total is = %f\n", 4*total);
+    if(rank == ROOT)
+        printf("Total is = %f\n", 4*total);
 
-        MPI_Finalize();
-    }
+    MPI_Finalize();
+}
 \end{lstlisting}
 
 \subsection{NCCL}
-% TODO
-TODO: NCCL code is not working on my computer (GPUs crashing)
+% TODO: NCCL code is not working on my computer (GPUs crashing)
 
-\subsection{PyTorch DDP}
+\subsection{Build PyTorch with MPI}
 % TODO
+
+\subsection{Full simple DeepSpeed example}
+Here under is the full example about DeepSpeed that is presented early in the DeepSpeed section. The most important parts of code are already described in the mentioned section, please refer to it for more information.
+\begin{lstlisting}[language=Python]
+import torch
+import torchvision
+import torchvision.transforms as transforms
+import argparse
+import torch.nn as nn
+import torch.nn.functional as F
+import deepspeed
+
+def add_argument():
+    parser = argparse.ArgumentParser(description='CIFAR')
+    parser.add_argument('--with_cuda',
+                        default=False,
+                        action='store_true',
+                        help='use CPU in case there\'s no GPU support')
+    parser.add_argument('-b',
+                        '--batch_size',
+                        default=32,
+                        type=int,
+                        help='mini-batch size (default: 32)')
+    parser.add_argument('-e',
+                        '--epochs',
+                        default=30,
+                        type=int,
+                        help='number of total epochs (default: 30)')
+    parser.add_argument('--local_rank',
+                        type=int,
+                        default=-1,
+                        help='local rank passed from distributed launcher')
+    parser.add_argument('--log-interval',
+                        type=int,
+                        default=2000,
+                        help="output logging information at a given interval")
+
+    # Include DeepSpeed configuration arguments
+    parser = deepspeed.add_config_arguments(parser)
+    args = parser.parse_args()
+    return args
+
+deepspeed.init_distributed(dist_backend="gloo")
+
+transform = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+])
+
+if torch.distributed.get_rank() != 0:
+    # might be downloading cifar data, let rank 0 download first
+    torch.distributed.barrier()
+
+trainset = torchvision.datasets.CIFAR10(root='./data',
+                                        train=True,
+                                        download=True,
+                                        transform=transform)
+
+if torch.distributed.get_rank() == 0:
+    # cifar data is downloaded, indicate other ranks can proceed
+    torch.distributed.barrier()
+
+trainloader = torch.utils.data.DataLoader(trainset,
+                                          batch_size=16,
+                                          shuffle=True,
+                                          num_workers=2)
+
+classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
+
+args = add_argument()
+
+class Net(nn.Module):
+    def __init__(self):
+        super(Net, self).__init__()
+        self.conv1 = nn.Conv2d(3, 6, 5)
+        self.pool = nn.MaxPool2d(2, 2)
+        self.conv2 = nn.Conv2d(6, 16, 5)
+        self.fc1 = nn.Linear(16 * 5 * 5, 120)
+        self.fc2 = nn.Linear(120, 84)
+        self.fc3 = nn.Linear(84, 10)
+
+    def forward(self, x):
+        x = self.pool(F.relu(self.conv1(x)))
+        x = self.pool(F.relu(self.conv2(x)))
+        x = x.view(-1, 16 * 5 * 5)
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+        return x
+
+net = Net()
+net.requires_grad_(False)
+
+# parameters = filter(lambda p: p.requires_grad, net.parameters())
+
+model_engine, optimizer, trainloader, __ = deepspeed.initialize(args=args, model=net, model_parameters=net.parameters(), training_data=trainset)
+
+fp16 = model_engine.fp16_enabled()
+print(f'fp16={fp16}')
+
+criterion = nn.CrossEntropyLoss()
+
+for epoch in range(args.epochs):
+    running_loss = 0.0
+    for i, data in enumerate(trainloader):
+        inputs, labels = data[0].to(model_engine.local_rank), data[1].to(model_engine.local_rank)
+        if fp16:
+            inputs = inputs.half()
+        outputs = model_engine(inputs)
+        loss = criterion(outputs, labels)
+
+        model_engine.backward(loss)
+        model_engine.step()
+
+        # print statistics
+        running_loss += loss.item()
+        if i % args.log_interval == (args.log_interval - 1):  # print every log_interval mini-batches
+            print('[%d, %5d] loss: %.3f' %  (epoch + 1, i + 1, running_loss / args.log_interval))
+            running_loss = 0.0
+
+print('Finished Training')
+\end{lstlisting}
